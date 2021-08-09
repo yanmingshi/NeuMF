@@ -24,7 +24,6 @@ from neu_mf import GMF, MLP, NeuMF
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-writer = SummaryWriter('./log/neuMF-' + str(time.time()))
 logging = Logger('trainner', level='debug').logger
 
 CHKPOINT_PATH = "./check"
@@ -52,6 +51,7 @@ class Trainer(object):
         self.metrics = args.metrics
         self.min_epoch = args.min_epoch
         self.optimizer = self.get_optimizer(self.model)
+        self.writer = SummaryWriter('./log/' + args.model_name + '-' + str(time.time()))
 
     def get_loss(self, scores, labels):
         return self.loss(scores, labels)
@@ -64,6 +64,19 @@ class Trainer(object):
             optimizer = optim.SGD(params, lr=self.learning_rate, weight_decay=self.weight_decay)
         return optimizer
 
+    def save_model(self, best_model):
+        # 保存模型
+        if self.model.MLP is not None and self.model.GMF is None:
+            torch.save({'MLP': best_model.MLP.state_dict(), 'neu_layer': best_model.neu_layer.state_dict()},
+                       CHKPOINT_PATH + '/MLP_b' + str(self.batch_size) + '_emb_' + str(self.model.MLP.embedding_size) + '_neg_' + str(self.negative_count) + '.pth')
+        elif self.model.GMF is not None and self.model.MLP is None:
+            torch.save({'GMF': best_model.GMF.state_dict(), 'neu_layer': best_model.neu_layer.state_dict()},
+                       CHKPOINT_PATH + '/GMF_b' + str(self.batch_size) + '_emb_' + str(self.model.GMF.embedding_size) + '_neg_' + str(self.negative_count) + '.pth')
+        elif self.model.GMF is not None and self.model.MLP is not None:
+            torch.save(best_model, CHKPOINT_PATH + '/newMF_b' + str(self.batch_size) + '_emb_' + str(self.model.GMF.embedding_size) + '_neg_' + str(self.negative_count) + '.pth')
+        else:
+            raise Exception("GMF and MLP can't both None")
+
     @torch.no_grad()
     def evaluate(self, data_loader, epoch):
         self.model.eval()
@@ -73,7 +86,7 @@ class Trainer(object):
             tqdm(
                 enumerate(data_loader),
                 total=len(data_loader),
-                desc=f"\033[1;35mTrain \033[0m"
+                desc=f"\033[1;35mEvaluate \033[0m"
             )
         )
         topk_list = []
@@ -81,19 +94,24 @@ class Trainer(object):
             batch_data = batch_data.to(device)
             items = batch_data[:, 1:]
             users = batch_data[:, 0].view(-1, 1).repeat(1, items.shape[1])
-            scores = self.model(users, items)
+            scores = self.model(users.reshape(-1), items.reshape(-1))
             scores = scores.view(items.shape)
             _, topk_idx = torch.topk(scores, self.topk, dim=-1)
+            topk = []
+            # 根据topk的下标获取topk的item编号
+            for i, item in enumerate(topk_idx):
+                topk.append(items[i, item].unsqueeze(0))
+            topks = torch.cat(topk, 0)
             # 拿到gt值，然后用topk的item值与gt值做减法 等于0则为命中的预测
             gt = items[:, 0]
             gts = gt.view(-1, 1).repeat(1, self.topk)
-            mask = topk_idx - gts == 0
+            mask = topks - gts == 0
             topk_list.extend(mask.cpu())
         topk_list = torch.cat(topk_list).view(-1, 10).numpy()
         gt_len = np.ones(len(topk_list), dtype=int)
         metric_dict = self.calculate_result(topk_list, gt_len, epoch)
         epoch_time = time.time() - start_time
-        logging.info(f"evaluator {epoch} cost time {epoch_time}, result: " + metric_dict.__str__())
+        logging.info(f"evaluator %d cost time %.2fs, result: %s " % (epoch, epoch_time, metric_dict.__str__()))
         return metric_dict
 
     def calculate_result(self, topk_list, gt_len, epoch):
@@ -107,11 +125,10 @@ class Trainer(object):
         for metric, value in zip(self.metrics, result_list):
             key = '{}@{}'.format(metric, self.topk)
             metric_dict[key] = np.round(value[self.topk - 1], 4)
-            writer.add_scalar('evaluate ' + metric, metric_dict[key], epoch + 1)
+            self.writer.add_scalar('evaluate ' + metric, metric_dict[key], epoch + 1)
         return metric_dict
 
     def train_model(self, train_dataset, validate_dataset):
-        total_loss = 0.0
 
         train_loader = DataLoader(dataset=train_dataset, batch_size=self.batch_size, shuffle=True)
         validate_loader = DataLoader(dataset=validate_dataset, batch_size=self.batch_size)
@@ -119,6 +136,7 @@ class Trainer(object):
         best_model = None
         best_hit, best_ndcg, best_epoch = 0.0, 0.0, 0
         for epoch in range(self.epochs):
+            total_loss = 0.0
             self.model.train()
             start_time = time.time()
             train_data_iter = (
@@ -143,7 +161,7 @@ class Trainer(object):
                 total_loss += loss
 
                 # 记录loss到tensorboard可视化
-                writer.add_scalar('training loss', loss, epoch * self.batch_size + len(batch_data))
+                self.writer.add_scalar('training loss', loss, epoch * self.batch_size + len(batch_data))
                 # if batch_index % 10 == 9:
                 #     logging.info(
                 #         'epoch %d minibatch %d train loss is [%.4f] ' % (epoch + 1, batch_index + 1, total_loss))
@@ -154,27 +172,17 @@ class Trainer(object):
             # writer.add_scalar('training loss', total_loss, (epoch + 1) * len(train_loader))
 
             # 保存最好的模型
-            if epoch > self.min_epoch and total_loss <= min_loss:
-                min_loss = total_loss
-                best_model = copy.deepcopy(self.model)
+            # if epoch > self.min_epoch and total_loss <= min_loss:
+            #     min_loss = total_loss
+            #     best_model = copy.deepcopy(self.model)
 
             metric_dict = self.evaluate(validate_loader, epoch)
             hit, ndcg = metric_dict['hit@' + str(self.topk)], metric_dict['ndcg@' + str(self.topk)]
-            if hit > best_hit:
+            if epoch > self.min_epoch and hit > best_hit:
                 best_hit, best_ndcg, best_epoch = hit, ndcg, epoch
                 best_model = copy.deepcopy(self.model)
-
-        # 保存模型
-        if self.model.MLP is not None and self.model.GMF is None:
-            torch.save({'MLP': best_model.MLP.state_dict(), 'neu_layer': best_model.neu_layer.state_dict()},
-                       CHKPOINT_PATH + '/MLP.pth')
-        elif self.model.GMF is not None and self.model.MLP is None:
-            torch.save({'GMF': best_model.GMF.state_dict(), 'neu_layer': best_model.neu_layer.state_dict()},
-                       CHKPOINT_PATH + '/GMF.pth')
-        elif self.model.GMF is not None and self.model.MLP is not None:
-            torch.save(best_model, CHKPOINT_PATH + '/newMF.pth')
-        else:
-            raise Exception("GMF and MLP can't both None")
+                # 保存最好的模型
+                self.save_model(best_model)
 
         logging.info(f"training end, best iteration %d, results: hit@{self.topk}: %s, ndgc@{self.topk}: %s" %
                      (best_epoch+1, best_hit, best_ndcg))
@@ -187,18 +195,20 @@ if __name__ == '__main__':
     parser.add_argument('--mlp_embedding_size', type=str, default=32, help='')
     parser.add_argument('--layers', type=str, default=[64, 32, 16, 8], help='')
     parser.add_argument('--lr', type=str, default=0.001, help='')
-    parser.add_argument('--decay', type=str, default=0, help='')
-    parser.add_argument('--negative_count', type=str, default=9, help='')
-    parser.add_argument('--batch_size', type=str, default=256, help='')
+    parser.add_argument('--decay', type=str, default=1e-4, help='')
+    parser.add_argument('--negative_count', type=str, default=4, help='')
+    parser.add_argument('--batch_size', type=str, default=512, help='')
     parser.add_argument('--epochs', type=str, default=50, help='')
     parser.add_argument('--min_epoch', type=str, default=5, help='')
     parser.add_argument('--topk', type=str, default=10, help='')
     parser.add_argument('--metrics', type=str, default=['hit', 'ndcg'], help='')
-    parser.add_argument('--signal', type=str, default=True, help='')
-    parser.add_argument('--is_pretrain', type=str, default=False, help='')
     parser.add_argument('--gmf_ckpt_path', type=str, default='./check/GMF.pth', help='')
     parser.add_argument('--mlp_ckpt_path', type=str, default='./check/MLP.pth', help='')
-    parser.add_argument('--full_ckpt_path', type=str, default='./check/neuMF.pth', help='')
+    parser.add_argument('--full_ckpt_path', type=str, default=None, help='')
+
+    parser.add_argument('--signal', type=str, default=True, help='')
+    parser.add_argument('--is_pretrain', type=str, default=False, help='')
+    parser.add_argument('--model_name', type=str, default='neuMF', help='')
     parsers = argparse.ArgumentParser('training and evaluation script', parents=[parser])
     args = parsers.parse_args()
 
@@ -219,4 +229,6 @@ if __name__ == '__main__':
     trainer = Trainer(model, args)
     start = time.time()
     trainer.train_model(train_dataset, validate_dataset)
+    # validate_dataloader = DataLoader(validate_dataset, 10)
+    # trainer.evaluate(validate_dataloader, 0)
     logging.info("training end total use time :%.2fs" % (time.time() - start))

@@ -10,7 +10,7 @@ import os
 from logging import handlers
 import colorlog
 
-LOG_ROOT = '../log/'
+LOG_ROOT = './log/'
 
 
 class Logger(object):

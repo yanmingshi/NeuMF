@@ -45,6 +45,7 @@ class MLP(nn.Module):
         for _, (in_size, out_size) in enumerate(zip(self.layers[:-1], self.layers[1:])):
             mlp_layers.append(nn.Linear(in_size, out_size))
             mlp_layers.append(nn.BatchNorm1d(out_size))
+            mlp_layers.append(nn.Dropout(0.25))
             mlp_layers.append(nn.ReLU())
         self.mlp_layers = nn.Sequential(*mlp_layers)
 
@@ -64,7 +65,7 @@ class NeuMF(nn.Module):
         self.is_pretrain = args.is_pretrain
         self.sigmoid = nn.Sigmoid()
         if self.MLP is not None and self.GMF is None:
-            self.neu_layer = nn.Linear(self.MLP.embedding_size, 1)
+            self.neu_layer = nn.Linear(self.MLP.layers[-1], 1)
         elif self.GMF is not None and self.MLP is None:
             self.neu_layer = nn.Linear(self.GMF.embedding_size, 1)
         elif self.GMF is not None and self.MLP is not None:
@@ -101,7 +102,7 @@ class NeuMF(nn.Module):
         elif self.full_ckpt_path is not None:
             params = torch.load(self.full_ckpt_path)
             self.load_state_dict(params)
-        elif self.GMF_ckpt_path is not None:
+        elif self.gmf_ckpt_path is not None:
             gmf_ckpt = torch.load(self.gmf_ckpt_path)
             self.GMF.load_state_dict(gmf_ckpt['GMF'])
             self.neu_layer.load_state_dict(gmf_ckpt['neu_layer'])
