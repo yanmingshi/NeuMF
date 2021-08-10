@@ -73,7 +73,8 @@ class Trainer(object):
             torch.save({'GMF': best_model.GMF.state_dict(), 'neu_layer': best_model.neu_layer.state_dict()},
                        CHKPOINT_PATH + '/GMF_b' + str(self.batch_size) + '_emb_' + str(self.model.GMF.embedding_size) + '_neg_' + str(self.negative_count) + '.pth')
         elif self.model.GMF is not None and self.model.MLP is not None:
-            torch.save(best_model, CHKPOINT_PATH + '/newMF_b' + str(self.batch_size) + '_emb_' + str(self.model.GMF.embedding_size) + '_neg_' + str(self.negative_count) + '.pth')
+            torch.save({'MLP': best_model.MLP.state_dict(), 'GMF': best_model.GMF.state_dict(), 'neu_layer': best_model.neu_layer.state_dict()},
+                       CHKPOINT_PATH + '/NewMF_b' + str(self.batch_size) + '_emb_' + str(self.model.GMF.embedding_size) + '_neg_' + str(self.negative_count) + '.pth')
         else:
             raise Exception("GMF and MLP can't both None")
 
@@ -191,23 +192,23 @@ class Trainer(object):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Set args', add_help=False)
 
-    parser.add_argument('--gmf_embedding_size', type=str, default=8, help='')
-    parser.add_argument('--mlp_embedding_size', type=str, default=32, help='')
-    parser.add_argument('--layers', type=str, default=[64, 32, 16, 8], help='')
+    parser.add_argument('--gmf_embedding_size', type=str, default=32, help='')
+    parser.add_argument('--mlp_embedding_size', type=str, default=128, help='')
+    parser.add_argument('--layers', type=str, default=[256, 128, 64, 32], help='')
     parser.add_argument('--lr', type=str, default=0.001, help='')
-    parser.add_argument('--decay', type=str, default=1e-4, help='')
+    parser.add_argument('--decay', type=str, default=0, help='')
     parser.add_argument('--negative_count', type=str, default=4, help='')
     parser.add_argument('--batch_size', type=str, default=512, help='')
     parser.add_argument('--epochs', type=str, default=50, help='')
     parser.add_argument('--min_epoch', type=str, default=5, help='')
     parser.add_argument('--topk', type=str, default=10, help='')
     parser.add_argument('--metrics', type=str, default=['hit', 'ndcg'], help='')
-    parser.add_argument('--gmf_ckpt_path', type=str, default='./check/GMF.pth', help='')
-    parser.add_argument('--mlp_ckpt_path', type=str, default='./check/MLP.pth', help='')
+    parser.add_argument('--gmf_ckpt_path', type=str, default='./check/GMF_b1024_emb_32_neg_4.pth', help='')
+    parser.add_argument('--mlp_ckpt_path', type=str, default='./check/MLP_b1024_emb_128_neg_4.pth', help='')
     parser.add_argument('--full_ckpt_path', type=str, default=None, help='')
 
-    parser.add_argument('--signal', type=str, default=True, help='')
-    parser.add_argument('--is_pretrain', type=str, default=False, help='')
+    parser.add_argument('--signal', type=str, default=False, help='')
+    parser.add_argument('--is_pretrain', type=str, default=True, help='')
     parser.add_argument('--model_name', type=str, default='neuMF', help='')
     parsers = argparse.ArgumentParser('training and evaluation script', parents=[parser])
     args = parsers.parse_args()
@@ -222,9 +223,9 @@ if __name__ == '__main__':
 
     gmf = GMF(args)
     mlp = MLP(args)
-    model = NeuMF(args, gmf, None)
+    # model = NeuMF(args, gmf, None)
     # model = NeuMF(args, None, mlp)
-    # model = NeuMF(args, gmf, mlp)
+    model = NeuMF(args, gmf, mlp)
     logging.info(model)
     trainer = Trainer(model, args)
     start = time.time()
