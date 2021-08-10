@@ -102,7 +102,7 @@ class NeuMF(nn.Module):
             params = torch.load(self.full_ckpt_path)
             self.GMF.load_state_dict(params['GMF'])
             self.MLP.load_state_dict(params['MLP'])
-            self.neu_layer.load_state_dict(params['new_layer'])
+            self.neu_layer.load_state_dict(params['neu_layer'])
         elif self.gmf_ckpt_path is not None:
             gmf_ckpt = torch.load(self.gmf_ckpt_path)
             self.GMF.load_state_dict(gmf_ckpt['GMF'])
